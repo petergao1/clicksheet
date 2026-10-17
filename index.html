@@ -102,6 +102,39 @@ button { font: inherit; }
 .seg label:last-child span { border-radius: 0 3px 3px 0; }
 .seg input:checked + span { background: var(--bone); border-color: var(--bone); color: var(--range); position: relative; }
 .seg input:focus-visible + span { outline: 2px solid var(--signal); outline-offset: 2px; position: relative; z-index: 1; }
+.sens { display: flex; }
+.sens-tog {
+  padding: 0.28rem 0.55rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  color: var(--haze);
+  background: var(--deck-2);
+  border: 1px solid var(--rule);
+  border-radius: 3px 0 0 3px;
+  cursor: pointer;
+}
+.sens-tog[aria-pressed="true"] { background: var(--bone); border-color: var(--bone); color: var(--range); }
+.sens-num {
+  width: 3.4rem;
+  margin: 0 0 0 -1px;
+  padding: 0 0.35rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--bone);
+  background: var(--deck-2);
+  border: 1px solid var(--rule);
+  border-radius: 0 3px 3px 0;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.sens-num::-webkit-inner-spin-button, .sens-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.sens-num:focus-visible { position: relative; z-index: 1; }
+.sens-tog[aria-pressed="false"] + .sens-num { color: var(--haze); }
 .icon-btn {
   display: grid;
   place-items: center;
@@ -280,6 +313,10 @@ button { font: inherit; }
           <label for="size-l"><input type="radio" id="size-l" name="size" value="l"><span>L</span></label>
         </div>
       </fieldset>
+      <div class="sens">
+        <button class="sens-tog" id="sensBtn" type="button" aria-pressed="false" title="Lock the mouse and aim at your Valorant sensitivity">Match sens</button>
+        <input class="sens-num" id="sensNum" type="number" inputmode="decimal" min="0.01" max="10" step="0.01" aria-label="Valorant sensitivity" title="Valorant sensitivity">
+      </div>
       <button class="icon-btn" id="soundBtn" type="button" aria-pressed="true" aria-label="Sound">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" stroke="none"></path>
@@ -333,9 +370,11 @@ button { font: inherit; }
 
   const SIZES = { s: 36, m: 52, l: 72 };
   const COUNTDOWN_MS = 1500; // 3, 2, 1 at half a second each
-  const settings = Object.assign({ count: '30', size: 'm', sound: true }, store.get('clicksheet.v2.settings', {}));
+  const settings = Object.assign({ count: '30', size: 'm', sound: true, matchSens: false, sens: 0.4 }, store.get('clicksheet.v2.settings', {}));
   if (!['20', '30', '50'].includes(settings.count)) settings.count = '30';
   if (!(settings.size in SIZES)) settings.size = 'm';
+  settings.matchSens = settings.matchSens === true;
+  if (!(settings.sens >= 0.01 && settings.sens <= 10)) settings.sens = 0.4;
   let pbs = store.get('clicksheet.v2.pb', {});
   if (!pbs || typeof pbs !== 'object') pbs = {};
   const setupKey = () => `${settings.count}|${settings.size}`;
@@ -385,6 +424,8 @@ button { font: inherit; }
   let prev = null;     // previous finished run, drawn as the faint line
   let undo = null;     // what to restore if a run is stopped early
   let target = null, fx = [];
+  let aim = { x: 0, y: 0 }; // Match sens: the crosshair the locked mouse moves
+  let lockMsg = '';         // shown in the arena when the mouse couldn't be locked
 
   function playTop() { const h = $('hud'); return h.offsetTop + h.offsetHeight + 10; }
   function bounds(r) {
@@ -400,6 +441,8 @@ button { font: inherit; }
     canvas.width = Math.max(1, Math.round(W * dpr));
     canvas.height = Math.max(1, Math.round(H * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    aim.x = clamp(aim.x, 0, W);
+    aim.y = clamp(aim.y, 0, H);
     if (target) {
       const b = bounds(target.r);
       target.x = clamp(target.x, b.x0, b.x1);
@@ -466,7 +509,9 @@ button { font: inherit; }
       const n = 3 - Math.floor((now - countdownAt) / (COUNTDOWN_MS / 3));
       label(String(Math.max(1, n)), cy, 72, T.bone, 700, 0);
     } else if (mode === 'idle') {
-      if (cur && cur.done && cur.rts.length) {
+      if (lockMsg) {
+        label(lockMsg, cy, 14, T.signal);
+      } else if (cur && cur.done && cur.rts.length) {
         label(`${Math.round(mean(cur.rts))} ms`, cy - 14, 56, T.bone, 700, 1);
         label('AVERAGE · SPACE OR START FOR ANOTHER RUN', cy + 30, 14, T.haze);
       } else {
@@ -474,14 +519,27 @@ button { font: inherit; }
       }
     }
 
-    if (!target) return;
-    ctx.beginPath();
-    ctx.arc(target.x, target.y, target.r, 0, Math.PI * 2);
-    ctx.fillStyle = T.signal;
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(4,8,12,0.5)';
-    ctx.stroke();
+    if (target) {
+      ctx.beginPath();
+      ctx.arc(target.x, target.y, target.r, 0, Math.PI * 2);
+      ctx.fillStyle = T.signal;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(4,8,12,0.5)';
+      ctx.stroke();
+    }
+    if (locked()) drawCrosshair(aim.x, aim.y);
+  }
+
+  // Crosshair arms around the aim point: 2px wide, 6px long, 4px gap. Shared by the
+  // system cursor (crosshairCursor) and the Match sens crosshair drawn on the canvas.
+  const ARMS = [[-1, -10, 2, 6], [-1, 4, 2, 6], [-10, -1, 6, 2], [4, -1, 6, 2]];
+  function drawCrosshair(x, y) {
+    x = Math.round(x); y = Math.round(y);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    for (const [dx, dy, w, h] of ARMS) ctx.fillRect(x + dx - 1, y + dy - 1, w + 2, h + 2);
+    ctx.fillStyle = '#FFFFFF';
+    for (const [dx, dy, w, h] of ARMS) ctx.fillRect(x + dx, y + dy, w, h);
   }
 
   function frame() {
@@ -510,6 +568,9 @@ button { font: inherit; }
     mode = 'countdown';
     countdownAt = performance.now();
     lastTick = -1;
+    aim = { x: W / 2, y: centerY() };
+    lockMsg = '';
+    if (settings.matchSens && !locked()) lock();
     refresh();
   }
 
@@ -522,17 +583,72 @@ button { font: inherit; }
     const key = setupKey();
     cur.pb = pbs[key] == null || avg < pbs[key];
     if (cur.pb) { pbs[key] = avg; store.set('clicksheet.v2.pb', pbs); }
+    releaseLock();
     refresh();
     sfx.done();
   }
 
-  function stopRun() {
+  function stopRun(keepLock) {
     if (mode === 'idle') return;
     mode = 'idle';
     target = null;
     if (undo) { cur = undo.cur; prev = undo.prev; undo = null; }
+    if (!keepLock) releaseLock();
     refresh();
   }
+
+  // ---------- Match sens ----------
+  // Valorant turns 0.07° per mouse count × sens, and its view is 103° wide. With the arena
+  // standing in for the screen, one raw count moves the crosshair this many px (DPI is
+  // already in the counts).
+  const pxPerCount = () => 0.07 * settings.sens * (W / 103);
+  const locked = () => document.pointerLockElement === canvas;
+  let lockSeq = 0, lockByPromise = false;
+
+  function lock() {
+    const seq = ++lockSeq;
+    const ask = (opts) => { try { return canvas.requestPointerLock(opts); } catch (err) { return Promise.reject(err); } };
+    const p = ask({ unadjustedMovement: true }); // raw counts, no OS acceleration
+    lockByPromise = !!(p && typeof p.then === 'function');
+    if (!lockByPromise) return; // older browsers answer only through pointerlockchange / pointerlockerror
+    p.catch(() => {
+      if (seq !== lockSeq || mode === 'idle' || locked()) return;
+      // No raw input here: lock anyway, with the OS pointer speed and acceleration.
+      const q = ask();
+      if (q && typeof q.then === 'function') q.catch(() => { if (seq === lockSeq) lockFailed(); });
+    });
+  }
+
+  function releaseLock() {
+    lockSeq++;
+    if (locked()) document.exitPointerLock();
+  }
+
+  function lockFailed() {
+    if (mode === 'idle') return;
+    lockMsg = 'MOUSE LOCK FAILED · TRY AGAIN';
+    stopRun();
+  }
+
+  document.addEventListener('pointerlockchange', () => {
+    if (locked()) {
+      // A lock that lands after its run already ended (or for a run without Match sens) is let go.
+      if (mode === 'idle' || !settings.matchSens) { document.exitPointerLock(); return; }
+      canvas.style.cursor = 'none';
+      canvas.focus({ preventScroll: true });
+    } else {
+      canvas.style.cursor = CURSOR;
+      if (settings.matchSens) stopRun(); // Esc or alt-tab mid-run
+    }
+  });
+  document.addEventListener('pointerlockerror', () => { if (!lockByPromise) lockFailed(); });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!locked()) return;
+    const k = pxPerCount();
+    aim.x = clamp(aim.x + e.movementX * k, 0, W);
+    aim.y = clamp(aim.y + e.movementY * k, 0, H);
+  });
 
   canvas.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -540,7 +656,7 @@ button { font: inherit; }
     canvas.focus({ preventScroll: true });
     if (mode !== 'live' || !target) return; // clicks only count once a run is live
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const [x, y] = locked() ? [aim.x, aim.y] : [e.clientX - rect.left, e.clientY - rect.top];
     const pn = performance.now();
     const now = e.timeStamp > 0 && Math.abs(pn - e.timeStamp) < 1000 ? e.timeStamp : pn;
 
@@ -572,7 +688,7 @@ button { font: inherit; }
     if (tag === 'INPUT' || e.repeat) return;
     if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
-      stopRun();
+      stopRun(true); // a Match sens restart keeps the mouse locked
       startRun();
     } else if ((e.key === ' ' || e.key === 'Enter') && tag !== 'BUTTON') {
       e.preventDefault();
@@ -688,18 +804,22 @@ button { font: inherit; }
   function crosshairCursor() {
     const R = (x, y, w, h, fill, extra = '') => `<rect x='${x}' y='${y}' width='${w}' height='${h}' fill='${fill}'${extra}/>`;
     let outline = '', ink = '';
-    for (const [x, y, w, h] of [[15, 6, 2, 6], [15, 20, 2, 6], [6, 15, 6, 2], [20, 15, 6, 2]]) {
+    for (const [dx, dy, w, h] of ARMS) {
+      const x = 16 + dx, y = 16 + dy;
       outline += R(x - 1, y - 1, w + 2, h + 2, '#000', " fill-opacity='0.6'");
       ink += R(x, y, w, h, '#FFFFFF');
     }
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>${outline}${ink}</svg>`;
     return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 16 16, crosshair`;
   }
+  const CURSOR = crosshairCursor();
 
   function syncControls() {
     $(`count-${settings.count}`).checked = true;
     $(`size-${settings.size}`).checked = true;
     $('soundBtn').setAttribute('aria-pressed', String(settings.sound));
+    $('sensBtn').setAttribute('aria-pressed', String(settings.matchSens));
+    $('sensNum').value = String(settings.sens);
   }
 
   document.querySelector('.controls').addEventListener('change', (e) => {
@@ -710,7 +830,23 @@ button { font: inherit; }
     mode = 'idle';
     target = null;
     cur = null; prev = null; undo = null;
+    releaseLock();
     refresh();
+  });
+
+  $('sensBtn').addEventListener('click', () => {
+    stopRun(); // a run keeps the mode it started in
+    settings.matchSens = !settings.matchSens;
+    store.set('clicksheet.v2.settings', settings);
+    lockMsg = '';
+    syncControls();
+  });
+
+  $('sensNum').addEventListener('change', (e) => {
+    const v = parseFloat(e.target.value);
+    if (v > 0) settings.sens = clamp(v, 0.01, 10);
+    store.set('clicksheet.v2.settings', settings);
+    syncControls();
   });
 
   $('soundBtn').addEventListener('click', () => {
@@ -721,7 +857,7 @@ button { font: inherit; }
   });
 
   // ---------- Boot ----------
-  canvas.style.cursor = crosshairCursor();
+  canvas.style.cursor = CURSOR;
   syncControls();
   resize();
   refresh();
