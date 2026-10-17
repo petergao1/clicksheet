@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ClickSheet</title>
+<meta name="description" content="Click-to-shoot aim trainer that graphs your reaction time for every target.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='7.5' fill='none' stroke='%23FF4B58' stroke-width='2.5'/%3E%3Ccircle cx='12' cy='12' r='2.5' fill='%23FF4B58'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Layout: one screen. Arena on top, the reaction graph under it. Nothing else.
+   Deliberately single-theme (a dark firing range), so every color is set explicitly here. */
+:root {
+  color-scheme: dark;
+  --range: #0A1119;   /* page ground */
+  --pit: #0D1620;     /* arena floor */
+  --grid: #15212D;    /* arena floor grid */
+  --deck: #111B25;    /* graph panel */
+  --deck-2: #182532;  /* controls */
+  --rule: #243343;    /* hairlines */
+  --bone: #ECE4D6;    /* primary ink */
+  --haze: #8E9BAA;    /* secondary ink */
+  --ghost: #5E6B7A;   /* previous run line */
+  --signal: #FF4B58;  /* accent: targets, this run's line, Start */
+  --good: #3DDBB0;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "Barlow", "Segoe UI", system-ui, sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--range);
+  color: var(--bone);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+button { font: inherit; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.app {
+  max-width: 76rem;
+  margin: 0 auto;
+  padding-inline: 1rem;
+  padding-block: 0.75rem 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem 1rem; }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.6rem;
+  line-height: 1;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.brand .word span { color: var(--signal); }
+.brand svg { width: 1.6rem; height: 1.6rem; color: var(--signal); flex: none; }
+
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.ctl { display: flex; align-items: center; gap: 0.45rem; border: 0; margin: 0; padding: 0; }
+.ctl legend { float: left; padding: 0; margin-right: 0.45rem; }
+.ctl-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--haze);
+}
+.seg { display: flex; }
+.seg label { position: relative; }
+.seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.seg span {
+  display: block;
+  min-width: 2.2rem;
+  padding: 0.28rem 0.55rem;
+  text-align: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--haze);
+  background: var(--deck-2);
+  border: 1px solid var(--rule);
+  margin-left: -1px;
+  cursor: pointer;
+}
+.seg label:first-child span { border-radius: 3px 0 0 3px; margin-left: 0; }
+.seg label:last-child span { border-radius: 0 3px 3px 0; }
+.seg input:checked + span { background: var(--bone); border-color: var(--bone); color: var(--range); position: relative; }
+.seg input:focus-visible + span { outline: 2px solid var(--signal); outline-offset: 2px; position: relative; z-index: 1; }
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  color: var(--bone);
+  background: var(--deck-2);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.icon-btn svg { width: 1.1rem; height: 1.1rem; }
+.icon-btn[aria-pressed="false"] { color: var(--haze); }
+.icon-btn[aria-pressed="false"] .wave { display: none; }
+.icon-btn[aria-pressed="true"] .mute { display: none; }
+.start-btn {
+  min-width: 6rem;
+  height: 2.1rem;
+  padding-inline: 1.1rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--range);
+  background: var(--signal);
+  border: 1px solid var(--signal);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.start-btn:hover { filter: brightness(1.08); }
+.start-btn[data-mode="stop"] { color: var(--signal); background: transparent; }
+
+.arena-wrap {
+  position: relative;
+  height: clamp(17rem, calc(100dvh - 24.5rem), 46rem);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+  background-color: var(--pit);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center center;
+}
+#arena { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#arena:focus-visible { outline: none; }
+.hud {
+  position: absolute;
+  top: 0.7rem;
+  left: 0.9rem;
+  right: 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.5rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.hud small { font-size: 0.85rem; font-weight: 500; color: var(--haze); margin-left: 0.2rem; }
+#hudCount { color: var(--haze); }
+#hudCount b { color: var(--bone); font-weight: 700; }
+
+.panel {
+  background: var(--deck);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.8rem 1rem 0.6rem;
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.panel-head { display: flex; justify-content: space-between; align-items: end; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
+.stats { display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; margin: 0; }
+.stats div { display: grid; }
+.stats dt {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--haze);
+}
+.stats dd {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.6rem;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.stats dd small { font-size: 0.85rem; font-weight: 500; color: var(--haze); margin-left: 0.15rem; }
+.stats dd .pb {
+  margin-left: 0.4rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--good);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 0 0.3rem;
+  vertical-align: 0.35em;
+}
+.legend { display: flex; gap: 1rem; font-size: 0.8rem; color: var(--haze); }
+.legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.legend i { display: inline-block; width: 1rem; height: 2px; }
+.legend .l-cur { background: var(--signal); }
+.legend .l-prev { background: var(--ghost); }
+
+.graph-box { position: relative; min-width: 0; }
+.graph-box svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+.g-grid { stroke: var(--rule); stroke-width: 1; }
+.g-lab { fill: var(--haze); font-size: 11px; font-family: var(--font-body); font-variant-numeric: tabular-nums; }
+.g-empty { fill: var(--haze); font-size: 13px; font-family: var(--font-body); }
+.g-line { fill: none; stroke: var(--signal); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.g-prev { fill: none; stroke: var(--ghost); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.g-pt { fill: var(--signal); stroke: var(--deck); stroke-width: 1.5; }
+.g-avg { stroke: var(--bone); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.7; }
+.g-avglab { fill: var(--bone); font-size: 11px; font-weight: 600; font-family: var(--font-body); paint-order: stroke; stroke: var(--deck); stroke-width: 4px; stroke-linejoin: round; }
+.g-guide { stroke: var(--haze); stroke-width: 1; }
+.g-dot { fill: var(--bone); stroke: var(--deck); stroke-width: 2; }
+.g-tip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 12px));
+  background: var(--deck-2);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.g-tip b { font-weight: 600; }
+
+.credit { margin: 0; color: var(--haze); font-size: 0.75rem; }
+.credit a { color: var(--haze); text-underline-offset: 2px; }
+
+@media (max-width: 600px) {
+  .arena-wrap { height: clamp(17rem, 55dvh, 30rem); }
+  .stats { gap: 0.4rem 1.25rem; }
+  .stats dd { font-size: 1.35rem; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1 class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="2"></circle>
+        <path d="M12 1v5M12 18v5M1 12h5M18 12h5" stroke="currentColor" stroke-width="2" fill="none"></path>
+        <circle cx="12" cy="12" r="2" fill="currentColor"></circle>
+      </svg>
+      <span class="word">Click<span>Sheet</span></span>
+    </h1>
+    <div class="controls">
+      <fieldset class="ctl">
+        <legend class="ctl-label">Targets</legend>
+        <div class="seg">
+          <label for="count-20"><input type="radio" id="count-20" name="count" value="20"><span>20</span></label>
+          <label for="count-30"><input type="radio" id="count-30" name="count" value="30"><span>30</span></label>
+          <label for="count-50"><input type="radio" id="count-50" name="count" value="50"><span>50</span></label>
+        </div>
+      </fieldset>
+      <fieldset class="ctl">
+        <legend class="ctl-label">Size</legend>
+        <div class="seg">
+          <label for="size-s"><input type="radio" id="size-s" name="size" value="s"><span>S</span></label>
+          <label for="size-m"><input type="radio" id="size-m" name="size" value="m"><span>M</span></label>
+          <label for="size-l"><input type="radio" id="size-l" name="size" value="l"><span>L</span></label>
+        </div>
+      </fieldset>
+      <button class="icon-btn" id="soundBtn" type="button" aria-pressed="true" aria-label="Sound">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" stroke="none"></path>
+          <path class="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"></path>
+          <path class="mute" d="M17 9l5 6M22 9l-5 6"></path>
+        </svg>
+      </button>
+      <button class="start-btn" id="startBtn" type="button" data-mode="start">Start</button>
+    </div>
+  </header>
+
+  <div class="arena-wrap" id="arenaWrap">
+    <canvas id="arena" tabindex="0" aria-label="Target arena" title="Space starts · R restarts · Esc stops"></canvas>
+    <div class="hud" id="hud">
+      <span id="hudCount"><b>0</b> / 30</span>
+      <span id="hudLast"></span>
+    </div>
+  </div>
+
+  <section class="panel" aria-label="Reaction time per target">
+    <div class="panel-head">
+      <dl class="stats">
+        <div><dt>Avg</dt><dd id="vAvg">—</dd></div>
+        <div><dt>Best</dt><dd id="vBest">—</dd></div>
+        <div><dt>Accuracy</dt><dd id="vAcc">—</dd></div>
+        <div><dt>PB avg</dt><dd id="vPb">—</dd></div>
+      </dl>
+      <div class="legend" id="legend" hidden>
+        <span><i class="l-cur"></i>This run</span>
+        <span><i class="l-prev"></i>Last run</span>
+      </div>
+    </div>
+    <div class="graph-box" id="graph"></div>
+  </section>
+
+  <p class="credit">Inspired by <a href="https://helloimxtal.github.io/ballsheet/" target="_blank" rel="noopener">BallSheet</a> and <a href="https://github.com/narendrajethi220/Reaction-Tester" target="_blank" rel="noopener">Reaction Tester</a>.</p>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const store = {
+    get(k, fb) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked: play on without saving */ } },
+  };
+
+  const SIZES = { s: 36, m: 52, l: 72 };
+  const COUNTDOWN_MS = 1500; // 3, 2, 1 at half a second each
+  const settings = Object.assign({ count: '30', size: 'm', sound: true }, store.get('clicksheet.v2.settings', {}));
+  if (!['20', '30', '50'].includes(settings.count)) settings.count = '30';
+  if (!(settings.size in SIZES)) settings.size = 'm';
+  let pbs = store.get('clicksheet.v2.pb', {});
+  if (!pbs || typeof pbs !== 'object') pbs = {};
+  const setupKey = () => `${settings.count}|${settings.size}`;
+  const total = () => Number(settings.count);
+
+  const css = getComputedStyle(document.documentElement);
+  const tok = (n) => css.getPropertyValue(n).trim();
+  const T = { signal: tok('--signal'), bone: tok('--bone'), haze: tok('--haze') };
+
+  // ---------- Sound ----------
+  let ac = null;
+  function unlockAudio() {
+    if (!settings.sound) return;
+    try {
+      if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === 'suspended') ac.resume();
+    } catch { ac = null; }
+  }
+  function tone(f0, dur, type, gain, delay = 0, f1) {
+    if (!ac || !settings.sound) return;
+    const t = ac.currentTime + delay;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    if (f1) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(t); o.stop(t + dur + 0.03);
+  }
+  const sfx = {
+    hit() { tone(1250, 0.055, 'square', 0.045, 0, 620); },
+    miss() { tone(190, 0.09, 'sine', 0.14, 0, 95); },
+    tick() { tone(880, 0.05, 'sine', 0.06); },
+    done() { tone(660, 0.12, 'triangle', 0.09); tone(990, 0.2, 'triangle', 0.08, 0.1); },
+  };
+
+  // ---------- Arena ----------
+  const canvas = $('arena');
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0;
+
+  let mode = 'idle';   // idle | countdown | live
+  let countdownAt = 0, lastTick = 0;
+  let cur = null;      // run on the graph: { rts: [], clicks, done }
+  let prev = null;     // previous finished run, drawn as the faint line
+  let undo = null;     // what to restore if a run is stopped early
+  let target = null, fx = [];
+
+  function playTop() { const h = $('hud'); return h.offsetTop + h.offsetHeight + 10; }
+  function bounds(r) {
+    const pad = 12;
+    const x0 = pad + r, y0 = playTop() + r;
+    return { x0, x1: Math.max(x0, W - pad - r), y0, y1: Math.max(y0, H - pad - r) };
+  }
+
+  function resize() {
+    const r = canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = r.width; H = r.height;
+    canvas.width = Math.max(1, Math.round(W * dpr));
+    canvas.height = Math.max(1, Math.round(H * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (target) {
+      const b = bounds(target.r);
+      target.x = clamp(target.x, b.x0, b.x1);
+      target.y = clamp(target.y, b.y0, b.y1);
+    }
+  }
+
+  // Next target lands a medium flick away from the last one.
+  function spawn(from) {
+    const d = SIZES[settings.size];
+    const r = d / 2;
+    const b = bounds(r);
+    const span = Math.min(b.x1 - b.x0, b.y1 - b.y0);
+    const dmin = Math.max(d + 12, span * 0.2);
+    const dmax = Math.max(dmin + 60, span * 0.62);
+    let x = rand(b.x0, b.x1), y = rand(b.y0, b.y1);
+    for (let i = 0; i < 80; i++) {
+      x = rand(b.x0, b.x1); y = rand(b.y0, b.y1);
+      const dd = Math.hypot(x - from.x, y - from.y);
+      if (dd >= dmin && dd <= dmax) break;
+    }
+    target = { x, y, r, spawn: performance.now() };
+    if (!reduceMotion) fx.push({ kind: 'ping', x, y, r, t0: performance.now() });
+  }
+
+  function centerY() { return (playTop() + H) / 2 - 10; }
+
+  function label(text, y, size, color, weight = 600, spacing = 2.5) {
+    ctx.font = `${weight} ${size}px "Barlow Condensed", "Arial Narrow", sans-serif`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = `${spacing}px`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = color;
+    ctx.fillText(text, W / 2, y);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  }
+
+  const FX_LIFE = { ping: 180, pop: 240, miss: 450 };
+  function draw(now) {
+    ctx.clearRect(0, 0, W, H);
+    fx = fx.filter((f) => now - f.t0 < FX_LIFE[f.kind]);
+    for (const f of fx) {
+      const p = clamp((now - f.t0) / FX_LIFE[f.kind], 0, 1);
+      if (f.kind === 'ping' || f.kind === 'pop') {
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.kind === 'ping' ? f.r + 12 * p : f.r * (1 + 0.6 * p), 0, Math.PI * 2);
+        ctx.lineWidth = f.kind === 'ping' ? 1.5 : 1 + 3 * (1 - p);
+        ctx.strokeStyle = f.kind === 'ping' ? `rgba(236,228,214,${0.4 * (1 - p)})` : `rgba(255,75,88,${0.85 * (1 - p)})`;
+        ctx.stroke();
+      } else if (f.kind === 'miss') {
+        ctx.globalAlpha = 1 - p;
+        ctx.strokeStyle = T.bone;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(f.x - 5, f.y - 5); ctx.lineTo(f.x + 5, f.y + 5);
+        ctx.moveTo(f.x + 5, f.y - 5); ctx.lineTo(f.x - 5, f.y + 5);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    const cy = centerY();
+    if (mode === 'countdown') {
+      const n = 3 - Math.floor((now - countdownAt) / (COUNTDOWN_MS / 3));
+      label(String(Math.max(1, n)), cy, 72, T.bone, 700, 0);
+    } else if (mode === 'idle') {
+      if (cur && cur.done && cur.rts.length) {
+        label(`${Math.round(mean(cur.rts))} ms`, cy - 14, 56, T.bone, 700, 1);
+        label('AVERAGE · SPACE OR START FOR ANOTHER RUN', cy + 30, 14, T.haze);
+      } else {
+        label('PRESS SPACE OR START', cy, 16, T.haze);
+      }
+    }
+
+    if (!target) return;
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, target.r, 0, Math.PI * 2);
+    ctx.fillStyle = T.signal;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(4,8,12,0.5)';
+    ctx.stroke();
+  }
+
+  function frame() {
+    const now = performance.now();
+    if (mode === 'countdown') {
+      const step = Math.floor((now - countdownAt) / (COUNTDOWN_MS / 3));
+      if (step !== lastTick && step < 3) { lastTick = step; sfx.tick(); }
+      if (now - countdownAt >= COUNTDOWN_MS) {
+        mode = 'live';
+        spawn({ x: W / 2, y: centerY() });
+        refresh();
+      }
+    }
+    draw(now);
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Runs ----------
+  function startRun() {
+    if (mode !== 'idle') return;
+    unlockAudio();
+    undo = { cur, prev };
+    if (cur && cur.done) prev = cur;
+    cur = { rts: [], clicks: 0, done: false };
+    target = null;
+    mode = 'countdown';
+    countdownAt = performance.now();
+    lastTick = -1;
+    refresh();
+  }
+
+  function finishRun() {
+    mode = 'idle';
+    target = null;
+    cur.done = true;
+    undo = null;
+    const avg = mean(cur.rts);
+    const key = setupKey();
+    cur.pb = pbs[key] == null || avg < pbs[key];
+    if (cur.pb) { pbs[key] = avg; store.set('clicksheet.v2.pb', pbs); }
+    refresh();
+    sfx.done();
+  }
+
+  function stopRun() {
+    if (mode === 'idle') return;
+    mode = 'idle';
+    target = null;
+    if (undo) { cur = undo.cur; prev = undo.prev; undo = null; }
+    refresh();
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    canvas.focus({ preventScroll: true });
+    if (mode !== 'live' || !target) return; // clicks only count once a run is live
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const pn = performance.now();
+    const now = e.timeStamp > 0 && Math.abs(pn - e.timeStamp) < 1000 ? e.timeStamp : pn;
+
+    cur.clicks++;
+    if (Math.hypot(x - target.x, y - target.y) > target.r) {
+      fx.push({ kind: 'miss', x, y, t0: pn });
+      sfx.miss();
+      refresh();
+      return;
+    }
+    cur.rts.push(Math.max(0, now - target.spawn));
+    fx.push({ kind: 'pop', x: target.x, y: target.y, r: target.r, t0: pn });
+    sfx.hit();
+    if (cur.rts.length >= total()) { finishRun(); return; }
+    spawn({ x: target.x, y: target.y });
+    refresh();
+  });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stopRun(); });
+
+  $('startBtn').addEventListener('click', () => {
+    if (mode === 'idle') startRun(); else stopRun();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    const tag = e.target && e.target.tagName;
+    if (e.key === 'Escape') { stopRun(); return; }
+    if (tag === 'INPUT' || e.repeat) return;
+    if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      stopRun();
+      startRun();
+    } else if ((e.key === ' ' || e.key === 'Enter') && tag !== 'BUTTON') {
+      e.preventDefault();
+      startRun();
+    }
+  });
+
+  // ---------- Readouts ----------
+  const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+  const ms = (v) => `${Math.round(v)}<small>ms</small>`;
+
+  function refresh() {
+    const n = cur ? cur.rts.length : 0;
+    $('hudCount').innerHTML = `<b>${n}</b> / ${total()}`;
+    $('hudLast').innerHTML = mode === 'live' && n ? ms(cur.rts[n - 1]) : '';
+    const avg = cur ? mean(cur.rts) : null;
+    $('vAvg').innerHTML = avg == null ? '—' : ms(avg) + (cur.done && cur.pb ? '<span class="pb">PB</span>' : '');
+    $('vBest').innerHTML = n ? ms(Math.min(...cur.rts)) : '—';
+    $('vAcc').textContent = cur && cur.clicks ? `${Math.round((n / cur.clicks) * 100)}%` : '—';
+    const pb = pbs[setupKey()];
+    $('vPb').innerHTML = pb == null ? '—' : ms(pb);
+    $('legend').hidden = !(prev && prev.rts.length > 1);
+    const sb = $('startBtn');
+    sb.dataset.mode = mode === 'idle' ? 'start' : 'stop';
+    sb.textContent = mode === 'idle' ? 'Start' : 'Stop';
+    renderGraph();
+  }
+
+  function niceStep(raw) {
+    if (raw <= 1) return 1;
+    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    for (const f of [1, 2, 2.5, 5, 10]) if (f * pow >= raw) return f * pow;
+    return 10 * pow;
+  }
+
+  let geo = null;
+  function renderGraph() {
+    const box = $('graph');
+    const N = total();
+    const w = Math.max(280, Math.round(box.clientWidth || 600));
+    const h = w < 520 ? 170 : 190;
+    const m = { l: 40, r: 14, t: 14, b: 26 };
+    const iw = w - m.l - m.r, ih = h - m.t - m.b;
+    const cv = cur ? cur.rts : [];
+    const pv = prev ? prev.rts : [];
+    const vmax = Math.max(500, ...cv, ...pv);
+    const ystep = niceStep(vmax / 4);
+    const ymax = Math.ceil(vmax / ystep) * ystep;
+    const X = (i) => m.l + (i / (N - 1)) * iw;
+    const Y = (v) => m.t + ih - (v / ymax) * ih;
+    const path = (vals) => vals.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+
+    let s = '';
+    for (let v = 0; v <= ymax + 1e-6; v += ystep) {
+      const y = Y(v).toFixed(1);
+      s += `<line class="g-grid" x1="${m.l}" x2="${w - m.r}" y1="${y}" y2="${y}"></line>`;
+      s += `<text class="g-lab" x="${m.l - 7}" y="${y}" dy="0.32em" text-anchor="end">${v}</text>`;
+    }
+    const xstep = N <= 20 ? 5 : 10;
+    for (let k = 1; k <= N; k = k === 1 ? xstep : k + xstep) {
+      s += `<text class="g-lab" x="${X(k - 1).toFixed(1)}" y="${h - 8}" text-anchor="middle">${k}</text>`;
+    }
+    if (!cv.length && !pv.length) {
+      s += `<text class="g-empty" x="${m.l + iw / 2}" y="${m.t + ih / 2}" text-anchor="middle">Reaction time for each target plots here</text>`;
+    }
+    if (pv.length > 1) s += `<path class="g-prev" d="${path(pv.slice(0, N))}"></path>`;
+    if (cv.length > 1) s += `<path class="g-line" d="${path(cv)}"></path>`;
+    cv.forEach((v, i) => { s += `<circle class="g-pt" cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3"></circle>`; });
+    const avg = mean(cv);
+    if (avg != null && cv.length > 1) {
+      const ay = Y(avg).toFixed(1);
+      s += `<line class="g-avg" x1="${m.l}" x2="${w - m.r}" y1="${ay}" y2="${ay}"></line>`;
+      s += `<text class="g-avglab" x="${w - m.r}" y="${ay}" dy="-5" text-anchor="end">avg ${Math.round(avg)}</text>`;
+    }
+    s += `<line class="g-guide" id="gGuide" y1="${m.t}" y2="${m.t + ih}" visibility="hidden"></line>`;
+    s += `<circle class="g-dot" id="gDot" r="4.5" visibility="hidden"></circle>`;
+    s += `<rect id="gHit" x="${m.l}" y="0" width="${iw}" height="${h}" fill="transparent"></rect>`;
+
+    box.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Reaction time in milliseconds for each target">${s}</svg><div class="g-tip" id="gTip" hidden></div>`;
+    geo = { w, X, Y, N, m, iw, cv, pv };
+    $('gHit').addEventListener('pointermove', onGraphMove);
+    $('gHit').addEventListener('pointerleave', hideTip);
+  }
+
+  function onGraphMove(e) {
+    if (!geo) return;
+    const { X, Y, N, m, iw, cv, pv, w } = geo;
+    const series = cv.length ? cv : pv;
+    if (!series.length) return;
+    const r = e.currentTarget.ownerSVGElement.getBoundingClientRect();
+    const sx = ((e.clientX - r.left) / r.width) * w;
+    const i = clamp(Math.round(((sx - m.l) / iw) * (N - 1)), 0, series.length - 1);
+    const hx = X(i), hy = Y(series[i]);
+    const guide = $('gGuide'), dot = $('gDot'), tip = $('gTip');
+    guide.setAttribute('x1', hx); guide.setAttribute('x2', hx); guide.setAttribute('visibility', 'visible');
+    dot.setAttribute('cx', hx); dot.setAttribute('cy', hy); dot.setAttribute('visibility', 'visible');
+    let text = `#${i + 1} · <b>${Math.round(series[i])} ms</b>`;
+    if (cv.length && pv[i] != null) text += ` · last run ${Math.round(pv[i])}`;
+    tip.innerHTML = text;
+    tip.hidden = false;
+    const scale = r.width / w;
+    const half = tip.offsetWidth / 2;
+    tip.style.left = `${clamp(hx * scale, half, r.width - half)}px`;
+    tip.style.top = `${hy * scale}px`;
+  }
+  function hideTip() {
+    for (const id of ['gGuide', 'gDot']) { const n = $(id); if (n) n.setAttribute('visibility', 'hidden'); }
+    const tip = $('gTip');
+    if (tip) tip.hidden = true;
+  }
+
+  // ---------- Controls ----------
+  function crosshairCursor() {
+    const R = (x, y, w, h, fill, extra = '') => `<rect x='${x}' y='${y}' width='${w}' height='${h}' fill='${fill}'${extra}/>`;
+    let outline = '', ink = '';
+    for (const [x, y, w, h] of [[15, 6, 2, 6], [15, 20, 2, 6], [6, 15, 6, 2], [20, 15, 6, 2]]) {
+      outline += R(x - 1, y - 1, w + 2, h + 2, '#000', " fill-opacity='0.6'");
+      ink += R(x, y, w, h, '#FFFFFF');
+    }
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>${outline}${ink}</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 16 16, crosshair`;
+  }
+
+  function syncControls() {
+    $(`count-${settings.count}`).checked = true;
+    $(`size-${settings.size}`).checked = true;
+    $('soundBtn').setAttribute('aria-pressed', String(settings.sound));
+  }
+
+  document.querySelector('.controls').addEventListener('change', (e) => {
+    const inp = e.target;
+    if (inp.name !== 'count' && inp.name !== 'size') return;
+    settings[inp.name] = inp.value;
+    store.set('clicksheet.v2.settings', settings);
+    mode = 'idle';
+    target = null;
+    cur = null; prev = null; undo = null;
+    refresh();
+  });
+
+  $('soundBtn').addEventListener('click', () => {
+    settings.sound = !settings.sound;
+    store.set('clicksheet.v2.settings', settings);
+    if (settings.sound) unlockAudio();
+    syncControls();
+  });
+
+  // ---------- Boot ----------
+  canvas.style.cursor = crosshairCursor();
+  syncControls();
+  resize();
+  refresh();
+  new ResizeObserver(() => resize()).observe($('arenaWrap'));
+  let queued = false;
+  new ResizeObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; renderGraph(); });
+  }).observe($('graph'));
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
