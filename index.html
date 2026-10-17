@@ -183,6 +183,7 @@ button { font: inherit; }
   background-size: 40px 40px;
   background-position: center center;
 }
+.arena-wrap.turning { background-image: none; } /* Match sens draws a grid fixed to the world instead */
 #arena { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 #arena:focus-visible { outline: none; }
 .hud {
@@ -316,7 +317,7 @@ button { font: inherit; }
         </div>
       </fieldset>
       <div class="sens">
-        <button class="sens-tog" id="sensBtn" type="button" aria-pressed="false" title="Lock the mouse and aim at your Valorant sensitivity">Match sens</button>
+        <button class="sens-tog" id="sensBtn" type="button" aria-pressed="false" title="Lock the mouse and turn the view at your Valorant sensitivity">Match sens</button>
         <input class="sens-num" id="sensNum" type="number" inputmode="decimal" min="0.01" max="10" step="0.01" aria-label="Valorant sensitivity" title="Valorant sensitivity">
       </div>
       <button class="icon-btn" id="soundBtn" type="button" aria-pressed="true" aria-label="Sound">
@@ -387,7 +388,7 @@ button { font: inherit; }
 
   const css = getComputedStyle(document.documentElement);
   const tok = (n) => css.getPropertyValue(n).trim();
-  const T = { signal: tok('--signal'), bone: tok('--bone'), haze: tok('--haze') };
+  const T = { signal: tok('--signal'), bone: tok('--bone'), haze: tok('--haze'), grid: tok('--grid'), rule: tok('--rule') };
 
   // ---------- Sound ----------
   let ac = null;
@@ -429,7 +430,6 @@ button { font: inherit; }
   let prev = null;     // previous finished run, drawn as the faint line
   let undo = null;     // what to restore if a run is stopped early
   let target = null, fx = [];
-  let aim = { x: 0, y: 0 }; // Match sens: the crosshair the locked mouse moves
   let pointerAt = null;     // last system cursor position over the arena
   let lockMsg = '';         // shown in the arena when the mouse couldn't be locked
 
@@ -447,9 +447,7 @@ button { font: inherit; }
     canvas.width = Math.max(1, Math.round(W * dpr));
     canvas.height = Math.max(1, Math.round(H * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    aim.x = clamp(aim.x, 0, W);
-    aim.y = clamp(aim.y, 0, H);
-    if (target) {
+    if (target && !target.v) {
       const b = bounds(target.r);
       target.x = clamp(target.x, b.x0, b.x1);
       target.y = clamp(target.y, b.y0, b.y1);
@@ -471,10 +469,16 @@ button { font: inherit; }
       if (dd >= dmin && dd <= dmax) break;
     }
     target = { x, y, r, spawn: performance.now(), enter: null, on: false, moved: false, overs: 0 };
+    // Match sens targets are spheres fixed in the world, as big as the Size setting at the crosshair.
+    if (settings.matchSens) {
+      const V = view();
+      target.v = unproject(x, y, V);
+      target.ang = Math.atan(r / V.f);
+    }
     // A crosshair already resting on the new target has nothing to flick.
-    const p = locked() ? aim : pointerAt;
-    if (p && Math.hypot(p.x - x, p.y - y) <= r) { target.on = true; target.enter = target.spawn; }
-    if (!reduceMotion) fx.push({ kind: 'ping', x, y, r, t0: performance.now() });
+    const p = locked() ? { x: W / 2, y: H / 2 } : pointerAt;
+    if (p && onTarget(p.x, p.y)) { target.on = true; target.enter = target.spawn; }
+    if (!reduceMotion) fx.push({ kind: 'ping', x, y, r, v: target.v, ang: target.ang, t0: performance.now() });
   }
 
   function centerY() { return (playTop() + H) / 2 - 10; }
@@ -492,12 +496,17 @@ button { font: inherit; }
   const FX_LIFE = { ping: 180, pop: 240, miss: 450 };
   function draw(now) {
     ctx.clearRect(0, 0, W, H);
+    const V = view();
+    if (settings.matchSens && mode !== 'idle') drawWorld(V);
     fx = fx.filter((f) => now - f.t0 < FX_LIFE[f.kind]);
     for (const f of fx) {
       const p = clamp((now - f.t0) / FX_LIFE[f.kind], 0, 1);
+      const s = shapeOf(f, V);
+      if (!s) continue;
       if (f.kind === 'ping' || f.kind === 'pop') {
+        const k = f.kind === 'ping' ? (f.r + 12 * p) / f.r : 1 + 0.6 * p;
         ctx.beginPath();
-        ctx.arc(f.x, f.y, f.kind === 'ping' ? f.r + 12 * p : f.r * (1 + 0.6 * p), 0, Math.PI * 2);
+        ctx.ellipse(s.x, s.y, s.a * k, s.b * k, s.rot, 0, Math.PI * 2);
         ctx.lineWidth = f.kind === 'ping' ? 1.5 : 1 + 3 * (1 - p);
         ctx.strokeStyle = f.kind === 'ping' ? `rgba(236,228,214,${0.4 * (1 - p)})` : `rgba(255,75,88,${0.85 * (1 - p)})`;
         ctx.stroke();
@@ -506,8 +515,8 @@ button { font: inherit; }
         ctx.strokeStyle = T.bone;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(f.x - 5, f.y - 5); ctx.lineTo(f.x + 5, f.y + 5);
-        ctx.moveTo(f.x + 5, f.y - 5); ctx.lineTo(f.x - 5, f.y + 5);
+        ctx.moveTo(s.x - 5, s.y - 5); ctx.lineTo(s.x + 5, s.y + 5);
+        ctx.moveTo(s.x + 5, s.y - 5); ctx.lineTo(s.x - 5, s.y + 5);
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
@@ -528,20 +537,24 @@ button { font: inherit; }
       }
     }
 
-    if (target) {
+    const s = target && shapeOf(target, V);
+    if (s) {
       ctx.beginPath();
-      ctx.arc(target.x, target.y, target.r, 0, Math.PI * 2);
+      ctx.ellipse(s.x, s.y, s.a, s.b, s.rot, 0, Math.PI * 2);
       ctx.fillStyle = T.signal;
       ctx.fill();
       ctx.lineWidth = 2;
       ctx.strokeStyle = 'rgba(4,8,12,0.5)';
       ctx.stroke();
     }
-    if (locked()) drawCrosshair(aim.x, aim.y);
+    if (locked()) {
+      drawCrosshair(W / 2, H / 2);
+      if (!rawInput) label('NO RAW INPUT · OS MOUSE SETTINGS APPLY', H - 16, 12, T.haze);
+    }
   }
 
   // Crosshair arms around the aim point: 2px wide, 6px long, 4px gap. Shared by the
-  // system cursor (crosshairCursor) and the Match sens crosshair drawn on the canvas.
+  // system cursor (crosshairCursor) and the Match sens crosshair fixed mid-arena.
   const ARMS = [[-1, -10, 2, 6], [-1, 4, 2, 6], [-10, -1, 6, 2], [4, -1, 6, 2]];
   function drawCrosshair(x, y) {
     x = Math.round(x); y = Math.round(y);
@@ -558,7 +571,7 @@ button { font: inherit; }
       if (step !== lastTick && step < 3) { lastTick = step; sfx.tick(); }
       if (now - countdownAt >= COUNTDOWN_MS) {
         mode = 'live';
-        spawn({ x: W / 2, y: centerY() });
+        spawn(settings.matchSens ? { x: W / 2, y: H / 2 } : { x: W / 2, y: centerY() });
         refresh();
       }
     }
@@ -577,7 +590,7 @@ button { font: inherit; }
     mode = 'countdown';
     countdownAt = performance.now();
     lastTick = -1;
-    aim = { x: W / 2, y: centerY() };
+    cam = { yaw: 0, pitch: 0 };
     lockMsg = '';
     if (settings.matchSens && !locked()) lock();
     refresh();
@@ -607,20 +620,98 @@ button { font: inherit; }
   }
 
   // ---------- Match sens ----------
-  // Valorant turns 0.07° per mouse count × sens, and its view is 103° wide. With the arena
-  // standing in for the screen, one raw count moves the crosshair this many px (DPI is
-  // already in the counts).
-  const pxPerCount = () => 0.07 * settings.sens * (W / 103);
+  // Works like the game: the crosshair stays in the middle and the view turns. Valorant turns
+  // 0.07° per raw mouse count × sens (DPI is already in the counts) and draws a 103° wide view
+  // across a 16:9 picture as wide as your monitor. The arena shows the middle of that picture
+  // at the same scale, so a target any distance from the crosshair takes the same hand
+  // movement to reach as in game.
+  const DEG = Math.PI / 180;
+  const YAW = 0.07 * DEG, HFOV = 103 * DEG, PITCH_MAX = 89 * DEG;
+  let cam = { yaw: 0, pitch: 0 };
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  // World axes: x right, y down, z straight ahead at the start of a run.
+  const dir = (yaw, pitch) => [Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+
+  // Camera right / down / forward, and the focal length in CSS px.
+  function view() {
+    const sy = Math.sin(cam.yaw), cy = Math.cos(cam.yaw), sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
+    const sw = Math.min(screen.width, (screen.height * 16) / 9) || W; // ultrawide plays pillarboxed 16:9
+    return { R: [cy, 0, -sy], D: [sy * sp, cp, cy * sp], F: [sy * cp, -sp, cy * cp], f: sw / 2 / Math.tan(HFOV / 2) };
+  }
+
+  // The world direction under an arena point.
+  function unproject(x, y, V = view()) {
+    const cx = (x - W / 2) / V.f, cy = (y - H / 2) / V.f, n = Math.hypot(cx, cy, 1);
+    return [0, 1, 2].map((i) => (cx * V.R[i] + cy * V.D[i] + V.F[i]) / n);
+  }
+
+  // Where a target or effect sits on screen. Match sens ones live in the world and are
+  // projected; a sphere off to the side comes out as an ellipse stretched away from the
+  // middle, as the game draws it.
+  function shapeOf(o, V) {
+    if (!o.v) return { x: o.x, y: o.y, a: o.r, b: o.r, rot: 0 };
+    const cx = dot(o.v, V.R), cy = dot(o.v, V.D), cz = dot(o.v, V.F);
+    if (!o.ang) return cz > 0.05 ? { x: W / 2 + (V.f * cx) / cz, y: H / 2 + (V.f * cy) / cz } : null;
+    const s2 = cx * cx + cy * cy;            // sin² of its angle off the crosshair
+    const k = Math.cos(o.ang) ** 2 - s2;
+    if (cz <= 0 || k < 0.02) return null;    // behind, or at the very edge of the view
+    const rho = (V.f * Math.sqrt(s2) * cz) / k, rot = Math.atan2(cy, cx);
+    return {
+      x: W / 2 + rho * Math.cos(rot), y: H / 2 + rho * Math.sin(rot),
+      a: (V.f * Math.sin(o.ang) * Math.cos(o.ang)) / k, b: (V.f * Math.sin(o.ang)) / Math.sqrt(k), rot,
+    };
+  }
+
+  // Is this arena point on the target? Match sens casts the ray through it at the sphere.
+  function onTarget(x, y) {
+    if (!target.v) return Math.hypot(x - target.x, y - target.y) <= target.r;
+    return dot(unproject(x, y), target.v) >= Math.cos(target.ang);
+  }
+
+  // A faint grid fixed to the world every 5°, with the horizon a shade brighter, so turning
+  // reads the way it does in game. Sampled every 2.5° along each line.
+  const GRID = [], HORIZON = [];
+  for (let yaw = 0; yaw < 360; yaw += 5) {
+    const line = [];
+    for (let p = -85; p <= 85; p += 2.5) line.push(dir(yaw * DEG, p * DEG));
+    GRID.push(line);
+  }
+  for (let p = -85; p <= 85; p += 5) {
+    const line = [];
+    for (let yaw = 0; yaw <= 360; yaw += 2.5) line.push(dir(yaw * DEG, p * DEG));
+    (p === 0 ? HORIZON : GRID).push(line);
+  }
+  function drawWorld(V) {
+    for (const [lines, color] of [[GRID, T.grid], [HORIZON, T.rule]]) {
+      ctx.beginPath();
+      for (const line of lines) {
+        let pen = false;
+        for (const v of line) {
+          const cz = dot(v, V.F);
+          if (cz < 0.2) { pen = false; continue; } // far outside the view
+          const x = W / 2 + (V.f * dot(v, V.R)) / cz, y = H / 2 + (V.f * dot(v, V.D)) / cz;
+          if (pen) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+          pen = true;
+        }
+      }
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = color;
+      ctx.stroke();
+    }
+  }
+
   const locked = () => document.pointerLockElement === canvas;
   let lockSeq = 0, lockByPromise = false;
+  let rawInput = false; // did the browser grant raw (unaccelerated) counts?
 
   function lock() {
     const seq = ++lockSeq;
+    rawInput = false;
     const ask = (opts) => { try { return canvas.requestPointerLock(opts); } catch (err) { return Promise.reject(err); } };
     const p = ask({ unadjustedMovement: true }); // raw counts, no OS acceleration
     lockByPromise = !!(p && typeof p.then === 'function');
     if (!lockByPromise) return; // older browsers answer only through pointerlockchange / pointerlockerror
-    p.catch(() => {
+    p.then(() => { if (seq === lockSeq) rawInput = true; }, () => {
       if (seq !== lockSeq || mode === 'idle' || locked()) return;
       // No raw input here: lock anyway, with the OS pointer speed and acceleration.
       const q = ask();
@@ -659,7 +750,7 @@ button { font: inherit; }
   function track(x, y, t) {
     if (mode !== 'live' || !target) return;
     target.moved = true;
-    const on = Math.hypot(x - target.x, y - target.y) <= target.r;
+    const on = onTarget(x, y);
     if (on && !target.on) {
       if (target.enter == null) target.enter = Math.max(t, target.spawn);
       else target.overs++;
@@ -670,10 +761,11 @@ button { font: inherit; }
   canvas.addEventListener('pointermove', (e) => {
     const pn = performance.now();
     if (locked()) {
-      const k = pxPerCount();
-      aim.x = clamp(aim.x + e.movementX * k, 0, W);
-      aim.y = clamp(aim.y + e.movementY * k, 0, H);
-      track(aim.x, aim.y, stamp(e, pn));
+      // Turn the view; the crosshair stays in the middle.
+      const k = YAW * settings.sens;
+      cam.yaw += e.movementX * k;
+      cam.pitch = clamp(cam.pitch - e.movementY * k, -PITCH_MAX, PITCH_MAX);
+      track(W / 2, H / 2, stamp(e, pn));
       return;
     }
     // Coalesced samples catch the entry between frames on high-rate mice.
@@ -696,13 +788,14 @@ button { font: inherit; }
     canvas.focus({ preventScroll: true });
     if (mode !== 'live' || !target) return; // clicks only count once a run is live
     const rect = canvas.getBoundingClientRect();
-    const [x, y] = locked() ? [aim.x, aim.y] : [e.clientX - rect.left, e.clientY - rect.top];
+    const [x, y] = locked() ? [W / 2, H / 2] : [e.clientX - rect.left, e.clientY - rect.top];
     const pn = performance.now();
     const now = stamp(e, pn);
 
     cur.clicks++;
-    if (Math.hypot(x - target.x, y - target.y) > target.r) {
-      fx.push({ kind: 'miss', x, y, t0: pn });
+    if (!onTarget(x, y)) {
+      // A Match sens miss mark stays where the shot went in the world.
+      fx.push({ kind: 'miss', x, y, v: target.v && unproject(x, y), t0: pn });
       sfx.miss();
       refresh();
       return;
@@ -714,10 +807,11 @@ button { font: inherit; }
     cur.rts.push(rt);
     cur.fl.push(clamp(Math.round(enter - target.spawn), 0, rt));
     cur.ov.push(target.overs);
-    fx.push({ kind: 'pop', x: target.x, y: target.y, r: target.r, t0: pn });
+    fx.push({ kind: 'pop', x: target.x, y: target.y, r: target.r, v: target.v, ang: target.ang, t0: pn });
     sfx.hit();
     if (cur.rts.length >= total()) { finishRun(); return; }
-    spawn({ x: target.x, y: target.y });
+    // Match sens measures the next flick from the crosshair, as the game would.
+    spawn(target.v ? { x, y } : { x: target.x, y: target.y });
     refresh();
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -764,6 +858,7 @@ button { font: inherit; }
     const sb = $('startBtn');
     sb.dataset.mode = mode === 'idle' ? 'start' : 'stop';
     sb.textContent = mode === 'idle' ? 'Start' : 'Stop';
+    $('arenaWrap').classList.toggle('turning', settings.matchSens && mode !== 'idle');
     renderGraph();
   }
 
