@@ -23,8 +23,10 @@
   --bone: #ECE4D6;    /* primary ink */
   --haze: #8E9BAA;    /* secondary ink */
   --ghost: #5E6B7A;   /* previous run line */
-  --signal: #FF4B58;  /* accent: targets, this run's line, Start */
+  --signal: #FF4B58;  /* accent: targets, Start */
   --good: #3DDBB0;
+  --flick: #3987E5;   /* graph: flick segment (validated with --click on --deck) */
+  --click: #D95926;   /* graph: click segment */
   --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
   --font-body: "Barlow", "Segoe UI", system-ui, sans-serif;
 }
@@ -244,22 +246,21 @@ button { font: inherit; }
 }
 .legend { display: flex; gap: 1rem; font-size: 0.8rem; color: var(--haze); }
 .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
-.legend i { display: inline-block; width: 1rem; height: 2px; }
-.legend .l-cur { background: var(--signal); }
-.legend .l-prev { background: var(--ghost); }
+.legend i { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 1px; }
+.legend .l-prev { width: 1rem; height: 2px; border-radius: 0; background: var(--ghost); }
+.l-fl, .g-fl { background: var(--flick); fill: var(--flick); }
+.l-ck, .g-ck { background: var(--click); fill: var(--click); }
 
 .graph-box { position: relative; min-width: 0; }
 .graph-box svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
 .g-grid { stroke: var(--rule); stroke-width: 1; }
 .g-lab { fill: var(--haze); font-size: 11px; font-family: var(--font-body); font-variant-numeric: tabular-nums; }
 .g-empty { fill: var(--haze); font-size: 13px; font-family: var(--font-body); }
-.g-line { fill: none; stroke: var(--signal); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.g-bar.on { filter: brightness(1.25); }
 .g-prev { fill: none; stroke: var(--ghost); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
-.g-pt { fill: var(--signal); stroke: var(--deck); stroke-width: 1.5; }
+.g-halo { fill: none; stroke: var(--deck); stroke-width: 5.5; stroke-linejoin: round; stroke-linecap: round; }
 .g-avg { stroke: var(--bone); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.7; }
 .g-avglab { fill: var(--bone); font-size: 11px; font-weight: 600; font-family: var(--font-body); paint-order: stroke; stroke: var(--deck); stroke-width: 4px; stroke-linejoin: round; }
-.g-guide { stroke: var(--haze); stroke-width: 1; }
-.g-dot { fill: var(--bone); stroke: var(--deck); stroke-width: 2; }
 .g-tip {
   position: absolute;
   z-index: 2;
@@ -274,6 +275,7 @@ button { font: inherit; }
   font-variant-numeric: tabular-nums;
 }
 .g-tip b { font-weight: 600; }
+.g-tip i { display: inline-block; width: 0.55rem; height: 2px; margin-right: 0.3rem; vertical-align: 0.25em; }
 
 .credit { margin: 0; color: var(--haze); font-size: 0.75rem; }
 .credit a { color: var(--haze); text-underline-offset: 2px; }
@@ -340,13 +342,16 @@ button { font: inherit; }
     <div class="panel-head">
       <dl class="stats">
         <div><dt>Avg</dt><dd id="vAvg">—</dd></div>
+        <div><dt>Flick avg</dt><dd id="vFlick">—</dd></div>
+        <div><dt>Click avg</dt><dd id="vClick">—</dd></div>
         <div><dt>Best</dt><dd id="vBest">—</dd></div>
         <div><dt>Accuracy</dt><dd id="vAcc">—</dd></div>
         <div><dt>PB avg</dt><dd id="vPb">—</dd></div>
       </dl>
-      <div class="legend" id="legend" hidden>
-        <span><i class="l-cur"></i>This run</span>
-        <span><i class="l-prev"></i>Last run</span>
+      <div class="legend">
+        <span><i class="l-fl"></i>Flick</span>
+        <span><i class="l-ck"></i>Click</span>
+        <span id="lgPrev" hidden><i class="l-prev"></i>Last run</span>
       </div>
     </div>
     <div class="graph-box" id="graph"></div>
@@ -420,11 +425,12 @@ button { font: inherit; }
 
   let mode = 'idle';   // idle | countdown | live
   let countdownAt = 0, lastTick = 0;
-  let cur = null;      // run on the graph: { rts: [], clicks, done }
+  let cur = null;      // run on the graph: { rts: [], fl: [], ov: [], clicks, done }
   let prev = null;     // previous finished run, drawn as the faint line
   let undo = null;     // what to restore if a run is stopped early
   let target = null, fx = [];
   let aim = { x: 0, y: 0 }; // Match sens: the crosshair the locked mouse moves
+  let pointerAt = null;     // last system cursor position over the arena
   let lockMsg = '';         // shown in the arena when the mouse couldn't be locked
 
   function playTop() { const h = $('hud'); return h.offsetTop + h.offsetHeight + 10; }
@@ -464,7 +470,10 @@ button { font: inherit; }
       const dd = Math.hypot(x - from.x, y - from.y);
       if (dd >= dmin && dd <= dmax) break;
     }
-    target = { x, y, r, spawn: performance.now() };
+    target = { x, y, r, spawn: performance.now(), enter: null, on: false, moved: false, overs: 0 };
+    // A crosshair already resting on the new target has nothing to flick.
+    const p = locked() ? aim : pointerAt;
+    if (p && Math.hypot(p.x - x, p.y - y) <= r) { target.on = true; target.enter = target.spawn; }
     if (!reduceMotion) fx.push({ kind: 'ping', x, y, r, t0: performance.now() });
   }
 
@@ -563,7 +572,7 @@ button { font: inherit; }
     unlockAudio();
     undo = { cur, prev };
     if (cur && cur.done) prev = cur;
-    cur = { rts: [], clicks: 0, done: false };
+    cur = { rts: [], fl: [], ov: [], clicks: 0, done: false };
     target = null;
     mode = 'countdown';
     countdownAt = performance.now();
@@ -643,11 +652,42 @@ button { font: inherit; }
   });
   document.addEventListener('pointerlockerror', () => { if (!lockByPromise) lockFailed(); });
 
+  // ---------- Flick / click ----------
+  // Flick runs from spawn to the first moment the crosshair is on the target; click from
+  // there to the hit. Sliding off and back on (an overshoot) stays in click, and is counted.
+  const stamp = (e, pn) => (e.timeStamp > 0 && Math.abs(pn - e.timeStamp) < 1000 ? e.timeStamp : pn);
+  function track(x, y, t) {
+    if (mode !== 'live' || !target) return;
+    target.moved = true;
+    const on = Math.hypot(x - target.x, y - target.y) <= target.r;
+    if (on && !target.on) {
+      if (target.enter == null) target.enter = Math.max(t, target.spawn);
+      else target.overs++;
+    }
+    target.on = on;
+  }
+
   canvas.addEventListener('pointermove', (e) => {
-    if (!locked()) return;
-    const k = pxPerCount();
-    aim.x = clamp(aim.x + e.movementX * k, 0, W);
-    aim.y = clamp(aim.y + e.movementY * k, 0, H);
+    const pn = performance.now();
+    if (locked()) {
+      const k = pxPerCount();
+      aim.x = clamp(aim.x + e.movementX * k, 0, W);
+      aim.y = clamp(aim.y + e.movementY * k, 0, H);
+      track(aim.x, aim.y, stamp(e, pn));
+      return;
+    }
+    // Coalesced samples catch the entry between frames on high-rate mice.
+    const rect = canvas.getBoundingClientRect();
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+    for (const ev of evs.length ? evs : [e]) {
+      pointerAt = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+      track(pointerAt.x, pointerAt.y, stamp(ev, pn));
+    }
+  });
+  canvas.addEventListener('pointerleave', () => {
+    if (locked()) return;
+    pointerAt = null;
+    if (target) target.on = false;
   });
 
   canvas.addEventListener('pointerdown', (e) => {
@@ -658,7 +698,7 @@ button { font: inherit; }
     const rect = canvas.getBoundingClientRect();
     const [x, y] = locked() ? [aim.x, aim.y] : [e.clientX - rect.left, e.clientY - rect.top];
     const pn = performance.now();
-    const now = e.timeStamp > 0 && Math.abs(pn - e.timeStamp) < 1000 ? e.timeStamp : pn;
+    const now = stamp(e, pn);
 
     cur.clicks++;
     if (Math.hypot(x - target.x, y - target.y) > target.r) {
@@ -667,7 +707,13 @@ button { font: inherit; }
       refresh();
       return;
     }
-    cur.rts.push(Math.max(0, now - target.spawn));
+    // Whole ms, so flick + click add up to the total exactly.
+    const rt = Math.max(0, Math.round(now - target.spawn));
+    // Never moved: it's all click. Moved, but no sample landed on it: it entered on the click.
+    const enter = target.enter ?? (target.moved ? now : target.spawn);
+    cur.rts.push(rt);
+    cur.fl.push(clamp(Math.round(enter - target.spawn), 0, rt));
+    cur.ov.push(target.overs);
     fx.push({ kind: 'pop', x: target.x, y: target.y, r: target.r, t0: pn });
     sfx.hit();
     if (cur.rts.length >= total()) { finishRun(); return; }
@@ -706,11 +752,15 @@ button { font: inherit; }
     $('hudLast').innerHTML = mode === 'live' && n ? ms(cur.rts[n - 1]) : '';
     const avg = cur ? mean(cur.rts) : null;
     $('vAvg').innerHTML = avg == null ? '—' : ms(avg) + (cur.done && cur.pb ? '<span class="pb">PB</span>' : '');
+    const fa = cur ? mean(cur.fl) : null;
+    $('vFlick').innerHTML = fa == null ? '—' : ms(fa);
+    // Rounded so the two phase averages add up to the shown Avg.
+    $('vClick').innerHTML = fa == null ? '—' : ms(Math.round(avg) - Math.round(fa));
     $('vBest').innerHTML = n ? ms(Math.min(...cur.rts)) : '—';
     $('vAcc').textContent = cur && cur.clicks ? `${Math.round((n / cur.clicks) * 100)}%` : '—';
     const pb = pbs[setupKey()];
     $('vPb').innerHTML = pb == null ? '—' : ms(pb);
-    $('legend').hidden = !(prev && prev.rts.length > 1);
+    $('lgPrev').hidden = !(prev && prev.rts.length > 1);
     const sb = $('startBtn');
     sb.dataset.mode = mode === 'idle' ? 'start' : 'stop';
     sb.textContent = mode === 'idle' ? 'Start' : 'Stop';
@@ -733,13 +783,23 @@ button { font: inherit; }
     const m = { l: 40, r: 14, t: 14, b: 26 };
     const iw = w - m.l - m.r, ih = h - m.t - m.b;
     const cv = cur ? cur.rts : [];
-    const pv = prev ? prev.rts : [];
+    const fl = cur ? cur.fl : [];
+    const ov = cur ? cur.ov : [];
+    const pv = prev ? prev.rts.slice(0, N) : [];
     const vmax = Math.max(500, ...cv, ...pv);
     const ystep = niceStep(vmax / 4);
     const ymax = Math.ceil(vmax / ystep) * ystep;
-    const X = (i) => m.l + (i / (N - 1)) * iw;
+    const bw = iw / N;                  // one band per target
+    const bar = Math.min(24, bw * 0.6); // the rest of the band is air
+    const X = (i) => m.l + (i + 0.5) * bw;
     const Y = (v) => m.t + ih - (v / ymax) * ih;
-    const path = (vals) => vals.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+    const f1 = (v) => v.toFixed(1);
+    const path = (vals) => vals.map((v, i) => `${i ? 'L' : 'M'}${f1(X(i))},${f1(Y(v))}`).join('');
+    // A column from y down to y + hh, its top corners rounded.
+    const col = (x, y, hh) => {
+      const r = Math.min(4, bar / 2, hh);
+      return `M${f1(x)},${f1(y + hh)}V${f1(y + r)}a${f1(r)},${f1(r)} 0 0 1 ${f1(r)},${f1(-r)}H${f1(x + bar - r)}a${f1(r)},${f1(r)} 0 0 1 ${f1(r)},${f1(r)}V${f1(y + hh)}Z`;
+    };
 
     let s = '';
     for (let v = 0; v <= ymax + 1e-6; v += ystep) {
@@ -754,48 +814,56 @@ button { font: inherit; }
     if (!cv.length && !pv.length) {
       s += `<text class="g-empty" x="${m.l + iw / 2}" y="${m.t + ih / 2}" text-anchor="middle">Reaction time for each target plots here</text>`;
     }
-    if (pv.length > 1) s += `<path class="g-prev" d="${path(pv.slice(0, N))}"></path>`;
-    if (cv.length > 1) s += `<path class="g-line" d="${path(cv)}"></path>`;
-    cv.forEach((v, i) => { s += `<circle class="g-pt" cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3"></circle>`; });
+    cv.forEach((v, i) => {
+      const x = X(i) - bar / 2, yb = Y(0), yf = Y(fl[i]), yt = Y(v);
+      let seg;
+      if (yb - yf >= 1.5 && yf - yt >= 1.5) {
+        // Flick at the bottom, click on top, a 2px surface gap between them.
+        seg = `<rect class="g-fl" x="${f1(x)}" y="${f1(yf + 1)}" width="${f1(bar)}" height="${f1(yb - yf - 1)}"></rect>`
+          + `<path class="g-ck" d="${col(x, yt, yf - 1 - yt)}"></path>`;
+      } else {
+        seg = `<path class="${yb - yf >= yf - yt ? 'g-fl' : 'g-ck'}" d="${col(x, yt, yb - yt)}"></path>`;
+      }
+      s += `<g class="g-bar">${seg}</g>`;
+    });
+    if (pv.length > 1) s += `<path class="g-halo" d="${path(pv)}"></path><path class="g-prev" d="${path(pv)}"></path>`;
     const avg = mean(cv);
     if (avg != null && cv.length > 1) {
       const ay = Y(avg).toFixed(1);
       s += `<line class="g-avg" x1="${m.l}" x2="${w - m.r}" y1="${ay}" y2="${ay}"></line>`;
       s += `<text class="g-avglab" x="${w - m.r}" y="${ay}" dy="-5" text-anchor="end">avg ${Math.round(avg)}</text>`;
     }
-    s += `<line class="g-guide" id="gGuide" y1="${m.t}" y2="${m.t + ih}" visibility="hidden"></line>`;
-    s += `<circle class="g-dot" id="gDot" r="4.5" visibility="hidden"></circle>`;
     s += `<rect id="gHit" x="${m.l}" y="0" width="${iw}" height="${h}" fill="transparent"></rect>`;
 
-    box.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Reaction time in milliseconds for each target">${s}</svg><div class="g-tip" id="gTip" hidden></div>`;
-    geo = { w, X, Y, N, m, iw, cv, pv };
+    box.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Flick and click time in milliseconds for each target">${s}</svg><div class="g-tip" id="gTip" hidden></div>`;
+    geo = { w, X, Y, m, bw, cv, fl, ov, pv, bars: box.querySelectorAll('.g-bar') };
     $('gHit').addEventListener('pointermove', onGraphMove);
+    $('gHit').addEventListener('pointerdown', onGraphMove);
     $('gHit').addEventListener('pointerleave', hideTip);
   }
 
+  // The whole band is a bar's hover target.
   function onGraphMove(e) {
     if (!geo) return;
-    const { X, Y, N, m, iw, cv, pv, w } = geo;
-    const series = cv.length ? cv : pv;
-    if (!series.length) return;
+    const { X, Y, m, bw, cv, fl, ov, pv, w, bars } = geo;
     const r = e.currentTarget.ownerSVGElement.getBoundingClientRect();
     const sx = ((e.clientX - r.left) / r.width) * w;
-    const i = clamp(Math.round(((sx - m.l) / iw) * (N - 1)), 0, series.length - 1);
-    const hx = X(i), hy = Y(series[i]);
-    const guide = $('gGuide'), dot = $('gDot'), tip = $('gTip');
-    guide.setAttribute('x1', hx); guide.setAttribute('x2', hx); guide.setAttribute('visibility', 'visible');
-    dot.setAttribute('cx', hx); dot.setAttribute('cy', hy); dot.setAttribute('visibility', 'visible');
-    let text = `#${i + 1} · <b>${Math.round(series[i])} ms</b>`;
-    if (cv.length && pv[i] != null) text += ` · last run ${Math.round(pv[i])}`;
+    const i = Math.floor((sx - m.l) / bw);
+    if (!(i >= 0 && i < cv.length)) { hideTip(); return; }
+    bars.forEach((b, k) => b.classList.toggle('on', k === i));
+    const tip = $('gTip');
+    let text = `#${i + 1} · <b>${cv[i]} ms</b>`;
+    if (pv[i] != null) text += ` · last run ${pv[i]}`;
+    text += `<br><i class="l-fl"></i><b>${fl[i]}</b> flick · <i class="l-ck"></i><b>${cv[i] - fl[i]}</b> click · <b>${ov[i]}</b> overshoot${ov[i] === 1 ? '' : 's'}`;
     tip.innerHTML = text;
     tip.hidden = false;
     const scale = r.width / w;
     const half = tip.offsetWidth / 2;
-    tip.style.left = `${clamp(hx * scale, half, r.width - half)}px`;
-    tip.style.top = `${hy * scale}px`;
+    tip.style.left = `${clamp(X(i) * scale, half, r.width - half)}px`;
+    tip.style.top = `${Y(cv[i]) * scale}px`;
   }
   function hideTip() {
-    for (const id of ['gGuide', 'gDot']) { const n = $(id); if (n) n.setAttribute('visibility', 'hidden'); }
+    if (geo) geo.bars.forEach((b) => b.classList.remove('on'));
     const tip = $('gTip');
     if (tip) tip.hidden = true;
   }
